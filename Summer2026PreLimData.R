@@ -179,27 +179,26 @@ obs_hour <- function(t) {
   if_else(m == 0L, (h - 1L) %% 24L, h)
 }
 
-# Capture blocks: the units photograph in 2-hour blocks with 1-hour breaks
-capture_blocks <- tibble(
-  hour  = c(19L, 20L, 22L, 23L, 1L, 2L, 4L, 5L),
-  block = rep(c("19:00–21:00", "22:00–00:00",
-                "01:00–03:00", "04:00–06:00"), each = 2)
-)
-block_levels <- unique(capture_blocks$block)
+# Position within the night: hours since 12:00 (19:00 = 7, 00:00 = 12, 06:00 = 18)
+night_pos <- function(h) (h - 12L) %% 24L
 
-# Sampling effort: which site-night-blocks were actually photographed
+# Sampling effort: images per site-night-hour. Drop partial hours (fewer than half
+# the site's typical images per hour, e.g. a block that started late) and daytime.
 effort <- moth_data %>%
   mutate(
     hour  = obs_hour(eventTime),
     image = coalesce(as.character(eventID),
                      str_remove(as.character(occurrenceID), "_\\d+_Mothbot.*$"))
   ) %>%
-  inner_join(capture_blocks, by = "hour") %>%
-  group_by(site, night, block) %>%
-  summarise(n_images = n_distinct(image), .groups = "drop")
+  group_by(site, night, hour) %>%
+  summarise(n_images = n_distinct(image), .groups = "drop") %>%
+  group_by(site) %>%
+  filter(n_images >= 0.5 * median(n_images)) %>%
+  ungroup() %>%
+  filter(night_pos(hour) %in% 5:20)   # 17:00 through 08:00
 
-# Unique individuals per site-night-block (an insect seen in both hours counts once)
-insecta_block <- moth_data %>%
+# Unique individuals per site-night-hour, 0 for sampled hours with no insects
+insecta_hourly <- moth_data %>%
   filter(class == "Insecta") %>%
   mutate(
     hour = obs_hour(eventTime),
@@ -209,41 +208,39 @@ insecta_block <- moth_data %>%
                          as.character(occurrenceID),
                          paste(cluster_ID, temporal_subcluster_ID, sep = "_"))
   ) %>%
-  inner_join(capture_blocks, by = "hour") %>%
-  group_by(site, night, block) %>%
+  group_by(site, night, hour) %>%
   summarise(n_individuals = n_distinct(individual), .groups = "drop") %>%
-  right_join(effort, by = c("site", "night", "block")) %>%
-  mutate(n_individuals = replace_na(n_individuals, 0L))
+  right_join(effort, by = c("site", "night", "hour")) %>%
+  mutate(
+    n_individuals = replace_na(n_individuals, 0L),
+    x = night_pos(hour) + 0.5   # midpoint of the hour
+  )
 
-insecta_hourly <- insecta_block %>%
-  group_by(site, block) %>%
-  summarise(
-    n_nights = n(),
-    mean     = mean(n_individuals),
-    se       = sd(n_individuals) / sqrt(n()),
-    .groups  = "drop"
-  ) %>%
-  mutate(block = factor(block, levels = block_levels)) %>%
-  arrange(site, block)
+print(insecta_hourly %>%
+        group_by(site, hour) %>%
+        summarise(n_nights = n(), mean = mean(n_individuals), .groups = "drop") %>%
+        arrange(site, night_pos(hour)), n = Inf)
 
-print(insecta_hourly, n = Inf)
-
+# Smooth: GAM with a quasi-Poisson family (counts, overdispersed), fit per site
 p_insecta_hourly <- ggplot(insecta_hourly,
-                           aes(x = block, y = mean, color = site, group = site)) +
-  geom_errorbar(aes(ymin = pmax(mean - se, 0), ymax = mean + se),
-                width = 0.12, linewidth = 0.8,
-                position = position_dodge(width = 0.15)) +
-  geom_line(linewidth = 1.3, position = position_dodge(width = 0.15)) +
-  geom_point(size = 3.5, position = position_dodge(width = 0.15)) +
+                           aes(x = x, y = n_individuals, color = site, fill = site)) +
+  geom_point(alpha = 0.35, size = 2.2,
+             position = position_jitter(width = 0.12, height = 0, seed = 1)) +
+  geom_smooth(method = "gam", formula = y ~ s(x, k = 5),
+              method.args = list(family = quasipoisson()),
+              linewidth = 1.4, alpha = 0.15) +
   scale_color_discrete(labels = site_labels) +
-  scale_y_continuous(limits = c(0, NA), expand = expansion(mult = c(0, 0.05))) +
+  scale_fill_discrete(labels = site_labels, guide = "none") +
+  scale_x_continuous(breaks = seq(7, 19, 2),
+                     labels = function(p) sprintf("%02d:00", (as.integer(p) + 12L) %% 24L)) +
+  expand_limits(y = 0) +
   labs(
-    x = "Capture block (local time)",
-    y = "Unique Insecta clusters per block",
+    x = "Hour (local time)",
+    y = "Unique Insecta clusters per hour",
     color = "Site",
-    title = "Insecta through the night",
+    title = "Insecta activity through the night",
     subtitle = paste0(format(min(dates), "%b %d"), " to ", format(max(dates), "%b %d, %Y"),
-                      " | mean ± SE | ", n_label())
+                      " | points = nights | line = GAM smooth ± 95% CI")
   ) +
   theme_bw(base_size = base_text) +
   theme(legend.position = "top")
