@@ -246,16 +246,13 @@ if (nrow(bad_rows) > 0) {
 }
 
 # Data for one rank: top N taxa, per site, plus ID rate.
-# measure = "clusters":   unique clusters (est. individuals), mean per night
-# measure = "detections": raw detections (every crop in every image), total over all nights
-rank_data <- function(rank, measure = c("clusters", "detections"), top_n = 10) {
+# Both measures count unique clusters (estimated individuals):
+# measure = "mean":  mean per night
+# measure = "total": summed over all nights
+rank_data <- function(rank, measure = c("mean", "total"), top_n = 10) {
   measure <- match.arg(measure)
 
-  base <- if (measure == "clusters") {
-    distinct(insecta, site, night, individual, .keep_all = TRUE)
-  } else {
-    insecta
-  }
+  base <- distinct(insecta, site, night, individual, .keep_all = TRUE)
 
   # Share identified to this rank, per site
   id_rate <- base %>%
@@ -270,7 +267,7 @@ rank_data <- function(rank, measure = c("clusters", "detections"), top_n = 10) {
     left_join(nights_per_site, by = "site") %>%
     mutate(
       mean_per_night = total / n_nights,
-      value = if (measure == "clusters") mean_per_night else total
+      value = if (measure == "mean") mean_per_night else total
     )
 
   top_taxa <- by_taxon %>%
@@ -295,7 +292,7 @@ rank_data <- function(rank, measure = c("clusters", "detections"), top_n = 10) {
     )
 }
 
-make_composition <- function(measure = c("clusters", "detections"), top_n = 10) {
+make_composition <- function(measure = c("mean", "total"), top_n = 10) {
   measure    <- match.arg(measure)
   rank_order <- c("order", "family", "genus", "species")
 
@@ -316,12 +313,12 @@ make_composition <- function(measure = c("clusters", "detections"), top_n = 10) 
       panel = factor(panel, levels = unique(panel[order(match(rank, rank_order))]))
     )
 
-  x_lab <- if (measure == "clusters") {
+  x_lab <- if (measure == "mean") {
     "Unique Insecta clusters per night (mean)"
   } else {
-    "Insecta detections (total, all nights)"
+    "Unique Insecta clusters (total, all nights)"
   }
-  title_suffix <- if (measure == "clusters") "estimated individuals" else "raw detections"
+  title_suffix <- if (measure == "mean") "mean per night" else "total"
 
   p <- ggplot(composition, aes(x = value, y = taxon_key, fill = site)) +
     geom_col(position = position_dodge(width = 0.8), width = 0.75) +
@@ -353,8 +350,8 @@ make_composition <- function(measure = c("clusters", "detections"), top_n = 10) 
   invisible(p)
 }
 
-p_composition_clusters   <- make_composition("clusters")
-p_composition_detections <- make_composition("detections")
+p_composition_mean  <- make_composition("mean")
+p_composition_total <- make_composition("total")
 
 #### Diversity: abundance, richness, Shannon, evenness by taxonomic level ####
 # Unit = one site-night. Individuals = unique clusters (see above).
