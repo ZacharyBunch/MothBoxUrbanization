@@ -415,17 +415,20 @@ p_diversity <- ggplot(bar_df, aes(x = site, y = mean, fill = site)) +
   geom_col(width = 0.7) +
   geom_errorbar(aes(ymin = pmax(mean - se, 0), ymax = mean + se),
                 width = 0.2, linewidth = 0.4) +
+  # N = nights contributing to each bar
+  geom_text(aes(y = mean + se, label = paste0("N=", n_nights)),
+            vjust = -0.5, size = 2.6) +
   geom_text(data = p_labels, aes(x = 1.5, y = Inf, label = label),
             inherit.aes = FALSE, vjust = 1.4, size = 3) +
   facet_grid(metric ~ rank, scales = "free_y", switch = "y",
              labeller = labeller(metric = metric_labels, rank = str_to_sentence)) +
-  scale_y_continuous(expand = expansion(mult = c(0, 0.25))) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.4))) +
   labs(
     x = NULL, y = NULL, fill = "Site",
     title = "Insecta diversity by taxonomic level",
     subtitle = paste0(
       format(min(dates), "%b %d"), " to ", format(max(dates), "%b %d, %Y"),
-      " | bars = mean ± SE across nights | Welch t-test, unadjusted p"
+      " | bars = mean ± SE | N = nights | Welch t-test, unadjusted p"
     )
   ) +
   theme_bw() +
