@@ -375,7 +375,7 @@ diversity_summary <- diversity_long %>%
 
 print(diversity_summary, n = Inf)
 
-#### Site comparison: Wilcoxon rank-sum per rank x metric ####
+#### Site comparison: Welch two-sample t-test per rank x metric ####
 # Nights are the replicates (about 5 per site), so power is low; treat p-values
 # as descriptive. Holm correction is applied within each metric across ranks.
 
@@ -384,7 +384,10 @@ site_tests <- diversity_long %>%
   group_by(rank, metric) %>%
   filter(n_distinct(site) == 2, all(table(site) >= 2)) %>%
   summarise(
-    p_value = suppressWarnings(wilcox.test(value ~ site, exact = FALSE)$p.value),
+    # Welch t-test (unequal variances); NA if values are constant within both sites
+    t_stat  = tryCatch(unname(t.test(value ~ site)$statistic), error = function(e) NA_real_),
+    df      = tryCatch(unname(t.test(value ~ site)$parameter), error = function(e) NA_real_),
+    p_value = tryCatch(t.test(value ~ site)$p.value,           error = function(e) NA_real_),
     .groups = "drop"
   ) %>%
   group_by(metric) %>%
@@ -403,7 +406,7 @@ dir.create(file.path("data", "derived"), recursive = TRUE, showWarnings = FALSE)
 write_csv(diversity, file.path("data", "derived", "diversity_by_site_night_rank.csv"))
 write_csv(diversity_compare, file.path("data", "derived", "diversity_site_comparison.csv"))
 
-#### Plot: bar graphs (mean +/- SE) with Wilcoxon p-values ####
+#### Plot: bar graphs (mean +/- SE) with Welch t-test p-values ####
 
 metric_labels <- c(
   abundance         = "Abundance",
@@ -443,7 +446,7 @@ p_diversity <- ggplot(bar_df, aes(x = site, y = mean, fill = site)) +
     title = "Insecta diversity by taxonomic level",
     subtitle = paste0(
       format(min(dates), "%b %d"), " to ", format(max(dates), "%b %d, %Y"),
-      " | bars = mean ± SE across nights | Wilcoxon rank-sum, unadjusted p"
+      " | bars = mean ± SE across nights | Welch t-test, unadjusted p"
     )
   ) +
   theme_bw() +
