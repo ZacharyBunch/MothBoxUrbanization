@@ -291,3 +291,145 @@ p_order  <- plot_rank("order")
 p_family <- plot_rank("family")
 p_genus  <- plot_rank("genus")
 p_species <- plot_rank("species")
+
+#### Diversity: abundance, richness, evenness by taxonomic level ####
+# Unit = one site-night. Individuals = unique clusters (see above).
+# At each level, only individuals identified to that level are used.
+#   abundance       : identified individuals
+#   richness        : number of taxa
+#   rarefied_rich.  : expected richness at a common sample size (Hurlbert 1971),
+#                     the smallest abundance across site-nights (min 2), so sites
+#                     with more individuals are not favored
+#   shannon         : H' = -sum(p ln p)
+#   simpson         : 1 - sum(p^2)
+#   evenness        : Pielou's J = H' / ln(S); NA when S < 2
+
+ranks <- c("order", "family", "genus", "species")
+
+rarefy_richness <- function(counts, n) {
+  N <- sum(counts)
+  if (N < n || n < 1) return(NA_real_)
+  sum(1 - exp(lchoose(N - counts, n) - lchoose(N, n)))
+}
+
+# Individuals x taxon counts per site-night for one rank
+taxon_counts <- function(rank) {
+  insecta %>%
+    filter(!is.na(.data[[rank]]), .data[[rank]] != "") %>%
+    distinct(site, night, individual, .keep_all = TRUE) %>%
+    count(site, night, taxon = .data[[rank]], name = "n")
+}
+
+diversity_rank <- function(rank) {
+  counts <- taxon_counts(rank)
+
+  per_night <- counts %>%
+    group_by(site, night) %>%
+    summarise(
+      abundance = sum(n),
+      richness  = n_distinct(taxon),
+      shannon   = -sum((n / sum(n)) * log(n / sum(n))),
+      simpson   = 1 - sum((n / sum(n))^2),
+      .groups = "drop"
+    ) %>%
+    mutate(evenness = if_else(richness >= 2, shannon / log(richness), NA_real_))
+
+  # Rarefy to the smallest site-night abundance at this rank (at least 2)
+  n_rare <- max(2, min(per_night$abundance))
+  rare <- counts %>%
+    group_by(site, night) %>%
+    summarise(rarefied_richness = rarefy_richness(n, n_rare), .groups = "drop")
+
+  # Keep site-nights with zero identified individuals as abundance 0
+  expand_grid(site = sites, night = dates) %>%
+    semi_join(distinct(moth_data, site, night), by = c("site", "night")) %>%
+    left_join(per_night, by = c("site", "night")) %>%
+    left_join(rare, by = c("site", "night")) %>%
+    mutate(
+      abundance = replace_na(abundance, 0L),
+      richness  = replace_na(richness, 0L),
+      rank      = rank,
+      rarefied_to = n_rare
+    )
+}
+
+diversity <- map_dfr(ranks, diversity_rank) %>%
+  mutate(rank = factor(rank, levels = ranks))
+
+metrics <- c("abundance", "richness", "rarefied_richness", "shannon", "simpson", "evenness")
+
+diversity_long <- diversity %>%
+  pivot_longer(all_of(metrics), names_to = "metric", values_to = "value") %>%
+  mutate(metric = factor(metric, levels = metrics))
+
+#### Summary table: mean +/- SE per site ####
+
+diversity_summary <- diversity_long %>%
+  group_by(rank, metric, site) %>%
+  summarise(
+    n_nights = sum(!is.na(value)),
+    mean     = mean(value, na.rm = TRUE),
+    se       = sd(value, na.rm = TRUE) / sqrt(n_nights),
+    .groups  = "drop"
+  )
+
+print(diversity_summary, n = Inf)
+
+#### Site comparison: Wilcoxon rank-sum per rank x metric ####
+# Nights are the replicates (about 5 per site), so power is low; treat p-values
+# as descriptive. Holm correction is applied within each metric across ranks.
+
+site_tests <- diversity_long %>%
+  filter(!is.na(value)) %>%
+  group_by(rank, metric) %>%
+  filter(n_distinct(site) == 2, all(table(site) >= 2)) %>%
+  summarise(
+    p_value = suppressWarnings(wilcox.test(value ~ site, exact = FALSE)$p.value),
+    .groups = "drop"
+  ) %>%
+  group_by(metric) %>%
+  mutate(p_holm = p.adjust(p_value, method = "holm")) %>%
+  ungroup()
+
+diversity_compare <- diversity_summary %>%
+  select(rank, metric, site, mean) %>%
+  pivot_wider(names_from = site, values_from = mean) %>%
+  left_join(site_tests, by = c("rank", "metric")) %>%
+  mutate(across(where(is.numeric), ~ round(.x, 3)))
+
+print(diversity_compare, n = Inf)
+
+dir.create(file.path("data", "derived"), recursive = TRUE, showWarnings = FALSE)
+write_csv(diversity, file.path("data", "derived", "diversity_by_site_night_rank.csv"))
+write_csv(diversity_compare, file.path("data", "derived", "diversity_site_comparison.csv"))
+
+#### Plot: each metric x rank, nights as points, mean +/- SE ####
+
+p_diversity <- ggplot(diversity_long, aes(x = site, y = value, color = site)) +
+  geom_jitter(width = 0.12, height = 0, alpha = 0.6, size = 1.8, na.rm = TRUE) +
+  stat_summary(fun.data = mean_se, geom = "pointrange",
+               color = "black", size = 0.35, na.rm = TRUE) +
+  facet_grid(metric ~ rank, scales = "free_y", switch = "y") +
+  labs(
+    x = NULL, y = NULL, color = "Site",
+    title = "Insecta diversity by taxonomic level",
+    subtitle = paste0(
+      format(min(dates), "%b %d"), " to ", format(max(dates), "%b %d, %Y"),
+      " | points = nights, black = mean ± SE | rarefied to: ",
+      paste(paste0(ranks, " n=", distinct(diversity, rank, rarefied_to)$rarefied_to),
+            collapse = ", ")
+    )
+  ) +
+  theme_bw() +
+  theme(
+    legend.position  = "top",
+    strip.placement  = "outside",
+    strip.background = element_rect(fill = "grey95"),
+    axis.text.x      = element_blank(),
+    axis.ticks.x     = element_blank()
+  )
+
+print(p_diversity)
+
+ggsave(file.path("figures", "insecta_diversity_by_rank.png"),
+       p_diversity, width = 10, height = 11, dpi = 300)
