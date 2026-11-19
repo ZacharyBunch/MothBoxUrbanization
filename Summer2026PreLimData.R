@@ -396,6 +396,16 @@ metric_labels <- c(
   evenness          = "Evenness (J)"
 )
 
+# One sample-size label per graph (nights per site)
+n_label <- function() {
+  if (n_distinct(nights_per_site$n_nights) == 1) {
+    paste0("N = ", nights_per_site$n_nights[1], " nights per site")
+  } else {
+    paste0("N nights: ", paste(nights_per_site$site, nights_per_site$n_nights,
+                                collapse = ", "))
+  }
+}
+
 format_p <- function(p) {
   case_when(
     is.na(p)  ~ "p = NA",
@@ -415,20 +425,17 @@ p_diversity <- ggplot(bar_df, aes(x = site, y = mean, fill = site)) +
   geom_col(width = 0.7) +
   geom_errorbar(aes(ymin = pmax(mean - se, 0), ymax = mean + se),
                 width = 0.2, linewidth = 0.4) +
-  # N = nights contributing to each bar
-  geom_text(aes(y = mean + se, label = paste0("N=", n_nights)),
-            vjust = -0.5, size = 2.6) +
   geom_text(data = p_labels, aes(x = 1.5, y = Inf, label = label),
             inherit.aes = FALSE, vjust = 1.4, size = 3) +
   facet_grid(metric ~ rank, scales = "free_y", switch = "y",
              labeller = labeller(metric = metric_labels, rank = str_to_sentence)) +
-  scale_y_continuous(expand = expansion(mult = c(0, 0.4))) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.25))) +
   labs(
     x = NULL, y = NULL, fill = "Site",
     title = "Insecta diversity by taxonomic level",
     subtitle = paste0(
       format(min(dates), "%b %d"), " to ", format(max(dates), "%b %d, %Y"),
-      " | bars = mean ± SE | N = nights | Welch t-test, unadjusted p"
+      " | bars = mean ± SE | ", n_label(), " | Welch t-test"
     )
   ) +
   theme_bw() +
@@ -445,8 +452,8 @@ print(p_diversity)
 ggsave(file.path("figures", "insecta_diversity_by_rank.png"),
        p_diversity, width = 10, height = 8, dpi = 300)
 
-#### Top 5 orders and families per site: count comparison ####
-# Taxa = union of each site's 5 most abundant (by unique clusters, all nights).
+#### Top 5 orders and families (both sites combined): count comparison ####
+# Taxa = 5 most abundant across both sites combined (unique clusters, all nights).
 # Counts are per night; nights where a taxon was not seen count as 0.
 # Bars = mean +/- SE across nights; Welch t-test per taxon.
 
@@ -456,12 +463,9 @@ plot_top_taxa <- function(rank, n_top = 5) {
   counts <- taxon_counts(rank)
 
   top_taxa <- counts %>%
-    group_by(site, taxon) %>%
+    group_by(taxon) %>%
     summarise(total = sum(n), .groups = "drop") %>%
-    group_by(site) %>%
     slice_max(total, n = n_top, with_ties = FALSE) %>%
-    ungroup() %>%
-    distinct(taxon) %>%
     pull(taxon)
 
   # Per-night counts with zeros for absent taxa
@@ -515,20 +519,18 @@ plot_top_taxa <- function(rank, n_top = 5) {
     geom_col(width = 0.7) +
     geom_errorbar(aes(ymin = pmax(mean - se, 0), ymax = mean + se),
                   width = 0.2, linewidth = 0.4) +
-    geom_text(aes(y = mean + se, label = paste0("N=", n_nights)),
-              vjust = -0.5, size = 2.6) +
     geom_text(data = tests, aes(x = 1.5, y = Inf, label = label),
               inherit.aes = FALSE, vjust = 1.4, size = 3) +
     facet_wrap(~ taxon, scales = "free_y") +
-    scale_y_continuous(expand = expansion(mult = c(0, 0.4))) +
+    scale_y_continuous(expand = expansion(mult = c(0, 0.25))) +
     labs(
       x = NULL,
       y = "Unique Insecta clusters per night (mean ± SE)",
       fill = "Site",
-      title = paste0("Top ", n_top, " ", tolower(rank), " per site"),
+      title = paste0("Top ", n_top, " ", tolower(rank), " (both sites combined)"),
       subtitle = paste0(
         format(min(dates), "%b %d"), " to ", format(max(dates), "%b %d, %Y"),
-        " | N = nights | Welch t-test, unadjusted p (Holm in table)"
+        " | bars = mean ± SE | ", n_label(), " | Welch t-test"
       )
     ) +
     theme_bw() +
