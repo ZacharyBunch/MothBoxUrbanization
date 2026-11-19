@@ -457,7 +457,7 @@ metric_labels <- c(
   abundance         = "Abundance",
   richness          = "Richness",
   shannon           = "Shannon H'",
-  evenness          = "Evenness (J)"
+  evenness          = "Evenness"
 )
 
 format_p <- function(p) {
