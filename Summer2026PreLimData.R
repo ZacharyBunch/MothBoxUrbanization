@@ -245,28 +245,37 @@ if (nrow(bad_rows) > 0) {
   insecta <- filter(insecta, !order %in% non_insect_orders)
 }
 
-# Data for one rank: top N taxa by combined mean, per site, plus ID rate
-rank_data <- function(rank, top_n = 10) {
-  # Share of individuals identified to this rank, per site
-  id_rate <- insecta %>%
-    distinct(site, night, individual, .keep_all = TRUE) %>%
+# Data for one rank: top N taxa, per site, plus ID rate.
+# measure = "clusters":   unique clusters (est. individuals), mean per night
+# measure = "detections": raw detections (every crop in every image), total over all nights
+rank_data <- function(rank, measure = c("clusters", "detections"), top_n = 10) {
+  measure <- match.arg(measure)
+
+  base <- if (measure == "clusters") {
+    distinct(insecta, site, night, individual, .keep_all = TRUE)
+  } else {
+    insecta
+  }
+
+  # Share identified to this rank, per site
+  id_rate <- base %>%
     group_by(site) %>%
     summarise(pct = round(100 * mean(!is.na(.data[[rank]]) & .data[[rank]] != "")),
               .groups = "drop")
 
-  by_taxon <- insecta %>%
+  by_taxon <- base %>%
     filter(!is.na(.data[[rank]]), .data[[rank]] != "") %>%
-    group_by(site, night, taxon = .data[[rank]]) %>%
-    summarise(n_individuals = n_distinct(individual), .groups = "drop") %>%
-    group_by(site, taxon) %>%
-    summarise(total = sum(n_individuals), .groups = "drop") %>%
+    count(site, taxon = .data[[rank]], name = "total") %>%
     complete(site = sites, taxon, fill = list(total = 0)) %>%
     left_join(nights_per_site, by = "site") %>%
-    mutate(mean_per_night = total / n_nights)
+    mutate(
+      mean_per_night = total / n_nights,
+      value = if (measure == "clusters") mean_per_night else total
+    )
 
   top_taxa <- by_taxon %>%
     group_by(taxon) %>%
-    summarise(overall = sum(mean_per_night), .groups = "drop") %>%
+    summarise(overall = sum(value), .groups = "drop") %>%
     slice_max(overall, n = top_n, with_ties = FALSE)
 
   # Panel label: rank + share identified at each site
@@ -286,50 +295,66 @@ rank_data <- function(rank, top_n = 10) {
     )
 }
 
-composition <- map_dfr(c("order", "family", "genus", "species"), rank_data)
+make_composition <- function(measure = c("clusters", "detections"), top_n = 10) {
+  measure    <- match.arg(measure)
+  rank_order <- c("order", "family", "genus", "species")
 
-print(composition %>% arrange(rank, desc(overall), site) %>%
-        select(rank, taxon, site, total, mean_per_night), n = Inf)
+  composition <- map_dfr(rank_order, rank_data, measure = measure, top_n = top_n)
 
-# Order taxa within each panel by combined abundance (largest at top)
-key_levels <- composition %>%
-  distinct(rank, taxon_key, overall) %>%
-  arrange(rank, overall) %>%
-  pull(taxon_key)
+  print(composition %>% arrange(rank, desc(overall), site) %>%
+          select(rank, taxon, site, total, mean_per_night), n = Inf)
 
-composition <- composition %>%
-  mutate(
-    taxon_key = factor(taxon_key, levels = unique(key_levels)),
-    panel = factor(panel, levels = unique(panel[order(match(rank, c("order", "family", "genus", "species")))]))
-  )
+  # Order taxa within each panel by combined value (largest at top)
+  key_levels <- composition %>%
+    distinct(rank, taxon_key, overall) %>%
+    arrange(rank, overall) %>%
+    pull(taxon_key)
 
-p_composition <- ggplot(composition,
-                        aes(x = mean_per_night, y = taxon_key, fill = site)) +
-  geom_col(position = position_dodge(width = 0.8), width = 0.75) +
-  facet_wrap(~ panel, ncol = 2, scales = "free") +
-  scale_y_discrete(labels = function(x) sub("^.*___", "", x)) +
-  scale_x_continuous(expand = expansion(mult = c(0, 0.05))) +
-  labs(
-    x = "Unique Insecta clusters per night (mean)",
-    y = NULL,
-    fill = "Site",
-    title = "Insecta composition by taxonomic level",
-    subtitle = paste0(
-      format(min(dates), "%b %d"), " to ", format(max(dates), "%b %d, %Y"),
-      " | top 10 taxa per level, both sites combined | ", n_label()
+  composition <- composition %>%
+    mutate(
+      taxon_key = factor(taxon_key, levels = unique(key_levels)),
+      panel = factor(panel, levels = unique(panel[order(match(rank, rank_order))]))
     )
-  ) +
-  theme_bw(base_size = base_text) +
-  theme(
-    legend.position  = "top",
-    strip.background = element_rect(fill = "grey95"),
-    strip.text       = element_text(face = "bold")
-  )
 
-print(p_composition)
+  x_lab <- if (measure == "clusters") {
+    "Unique Insecta clusters per night (mean)"
+  } else {
+    "Insecta detections (total, all nights)"
+  }
+  title_suffix <- if (measure == "clusters") "estimated individuals" else "raw detections"
 
-ggsave(file.path("figures", "insecta_composition_by_rank.png"),
-       p_composition, width = 18, height = 14, dpi = 300)
+  p <- ggplot(composition, aes(x = value, y = taxon_key, fill = site)) +
+    geom_col(position = position_dodge(width = 0.8), width = 0.75) +
+    facet_wrap(~ panel, ncol = 2, scales = "free") +
+    scale_y_discrete(labels = function(x) sub("^.*___", "", x)) +
+    scale_x_continuous(expand = expansion(mult = c(0, 0.05))) +
+    labs(
+      x = x_lab,
+      y = NULL,
+      fill = "Site",
+      title = paste0("Insecta composition by taxonomic level (", title_suffix, ")"),
+      subtitle = paste0(
+        format(min(dates), "%b %d"), " to ", format(max(dates), "%b %d, %Y"),
+        " | top ", top_n, " taxa per level, both sites combined | ", n_label()
+      )
+    ) +
+    theme_bw(base_size = base_text) +
+    theme(
+      legend.position  = "top",
+      strip.background = element_rect(fill = "grey95"),
+      strip.text       = element_text(face = "bold")
+    )
+
+  print(p)
+
+  ggsave(file.path("figures", paste0("insecta_composition_by_rank_", measure, ".png")),
+         p, width = 18, height = 14, dpi = 300)
+
+  invisible(p)
+}
+
+p_composition_clusters   <- make_composition("clusters")
+p_composition_detections <- make_composition("detections")
 
 #### Diversity: abundance, richness, Shannon, evenness by taxonomic level ####
 # Unit = one site-night. Individuals = unique clusters (see above).
