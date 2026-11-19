@@ -444,3 +444,108 @@ print(p_diversity)
 
 ggsave(file.path("figures", "insecta_diversity_by_rank.png"),
        p_diversity, width = 10, height = 8, dpi = 300)
+
+#### Top 5 orders and families per site: count comparison ####
+# Taxa = union of each site's 5 most abundant (by unique clusters, all nights).
+# Counts are per night; nights where a taxon was not seen count as 0.
+# Bars = mean +/- SE across nights; Welch t-test per taxon.
+
+site_nights <- distinct(moth_data, site, night)
+
+plot_top_taxa <- function(rank, n_top = 5) {
+  counts <- taxon_counts(rank)
+
+  top_taxa <- counts %>%
+    group_by(site, taxon) %>%
+    summarise(total = sum(n), .groups = "drop") %>%
+    group_by(site) %>%
+    slice_max(total, n = n_top, with_ties = FALSE) %>%
+    ungroup() %>%
+    distinct(taxon) %>%
+    pull(taxon)
+
+  # Per-night counts with zeros for absent taxa
+  per_night <- expand_grid(site_nights, taxon = top_taxa) %>%
+    left_join(counts, by = c("site", "night", "taxon")) %>%
+    mutate(n = replace_na(n, 0L))
+
+  # Order panels by overall mean count
+  taxon_order <- per_night %>%
+    group_by(taxon) %>%
+    summarise(m = mean(n), .groups = "drop") %>%
+    arrange(desc(m)) %>%
+    pull(taxon)
+
+  summary_df <- per_night %>%
+    group_by(site, taxon) %>%
+    summarise(
+      n_nights = n(),
+      total    = sum(n),
+      mean     = mean(n),
+      se       = sd(n) / sqrt(n()),
+      .groups  = "drop"
+    ) %>%
+    mutate(se = replace_na(se, 0),
+           taxon = factor(taxon, levels = taxon_order))
+
+  tests <- per_night %>%
+    group_by(taxon) %>%
+    summarise(
+      t_stat  = tryCatch(unname(t.test(n ~ site)$statistic), error = function(e) NA_real_),
+      df      = tryCatch(unname(t.test(n ~ site)$parameter), error = function(e) NA_real_),
+      p_value = tryCatch(t.test(n ~ site)$p.value,           error = function(e) NA_real_),
+      .groups = "drop"
+    ) %>%
+    mutate(p_holm = p.adjust(p_value, method = "holm"),
+           label  = format_p(p_value),
+           taxon  = factor(taxon, levels = taxon_order))
+
+  comparison <- summary_df %>%
+    select(taxon, site, total, mean, se) %>%
+    pivot_wider(names_from = site, values_from = c(total, mean, se)) %>%
+    left_join(select(tests, -label), by = "taxon") %>%
+    arrange(taxon) %>%
+    mutate(across(where(is.numeric), ~ round(.x, 3)))
+
+  print(comparison, n = Inf, width = Inf)
+  write_csv(comparison,
+            file.path("data", "derived", paste0("top", n_top, "_", rank, "_site_comparison.csv")))
+
+  p <- ggplot(summary_df, aes(x = site, y = mean, fill = site)) +
+    geom_col(width = 0.7) +
+    geom_errorbar(aes(ymin = pmax(mean - se, 0), ymax = mean + se),
+                  width = 0.2, linewidth = 0.4) +
+    geom_text(aes(y = mean + se, label = paste0("N=", n_nights)),
+              vjust = -0.5, size = 2.6) +
+    geom_text(data = tests, aes(x = 1.5, y = Inf, label = label),
+              inherit.aes = FALSE, vjust = 1.4, size = 3) +
+    facet_wrap(~ taxon, scales = "free_y") +
+    scale_y_continuous(expand = expansion(mult = c(0, 0.4))) +
+    labs(
+      x = NULL,
+      y = "Unique Insecta clusters per night (mean ± SE)",
+      fill = "Site",
+      title = paste0("Top ", n_top, " ", tolower(rank), " per site"),
+      subtitle = paste0(
+        format(min(dates), "%b %d"), " to ", format(max(dates), "%b %d, %Y"),
+        " | N = nights | Welch t-test, unadjusted p (Holm in table)"
+      )
+    ) +
+    theme_bw() +
+    theme(
+      legend.position  = "top",
+      strip.background = element_rect(fill = "grey95"),
+      axis.text.x      = element_blank(),
+      axis.ticks.x     = element_blank()
+    )
+
+  print(p)
+
+  ggsave(file.path("figures", paste0("top", n_top, "_", rank, "_by_site.png")),
+         p, width = 9, height = 6, dpi = 300)
+
+  invisible(p)
+}
+
+p_top_order  <- plot_top_taxa("order")
+p_top_family <- plot_top_taxa("family")
