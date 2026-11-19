@@ -170,11 +170,8 @@ nights_per_site <- moth_data %>%
   distinct(site, night) %>%
   count(site, name = "n_nights")
 
-# Position within the night: hours since 12:00 (19:00 = 7, 00:00 = 12, 06:00 = 18)
-night_pos <- function(h) (h - 12L) %% 24L
-
 # Each capture block ends with one frame exactly on the hour (e.g. 00:00:07).
-# Assign those frames to the hour they close, so they don't form a fake 1-image hour.
+# Assign those frames to the hour they close, so they stay in their block.
 obs_hour <- function(t) {
   t <- as.character(t)
   h <- as.integer(substr(t, 1, 2))
@@ -182,20 +179,27 @@ obs_hour <- function(t) {
   if_else(m == 0L, (h - 1L) %% 24L, h)
 }
 
-# Sampling effort: which site-night-hours were actually photographed
+# Capture blocks: the units photograph in 2-hour blocks with 1-hour breaks
+capture_blocks <- tibble(
+  hour  = c(19L, 20L, 22L, 23L, 1L, 2L, 4L, 5L),
+  block = rep(c("19:00–21:00", "22:00–00:00",
+                "01:00–03:00", "04:00–06:00"), each = 2)
+)
+block_levels <- unique(capture_blocks$block)
+
+# Sampling effort: which site-night-blocks were actually photographed
 effort <- moth_data %>%
   mutate(
     hour  = obs_hour(eventTime),
     image = coalesce(as.character(eventID),
                      str_remove(as.character(occurrenceID), "_\\d+_Mothbot.*$"))
   ) %>%
-  group_by(site, night, hour) %>%
+  inner_join(capture_blocks, by = "hour") %>%
+  group_by(site, night, block) %>%
   summarise(n_images = n_distinct(image), .groups = "drop")
 
-min_nights <- 3      # an hour must be sampled on at least this many nights
-night_window <- 5:20 # 17:00 through 08:00 (daytime captures excluded)
-
-insecta_hourly <- moth_data %>%
+# Unique individuals per site-night-block (an insect seen in both hours counts once)
+insecta_block <- moth_data %>%
   filter(class == "Insecta") %>%
   mutate(
     hour = obs_hour(eventTime),
@@ -205,55 +209,44 @@ insecta_hourly <- moth_data %>%
                          as.character(occurrenceID),
                          paste(cluster_ID, temporal_subcluster_ID, sep = "_"))
   ) %>%
-  group_by(site, night, hour) %>%
+  inner_join(capture_blocks, by = "hour") %>%
+  group_by(site, night, block) %>%
   summarise(n_individuals = n_distinct(individual), .groups = "drop") %>%
-  # Keep every sampled hour, with 0 where nothing was caught
-  right_join(effort, by = c("site", "night", "hour")) %>%
-  mutate(n_individuals = replace_na(n_individuals, 0L)) %>%
-  # Mean over the nights that were actually sampled in that hour
-  group_by(site, hour) %>%
+  right_join(effort, by = c("site", "night", "block")) %>%
+  mutate(n_individuals = replace_na(n_individuals, 0L))
+
+insecta_hourly <- insecta_block %>%
+  group_by(site, block) %>%
   summarise(
-    n_nights         = n(),
-    mean             = mean(n_individuals),
-    se               = sd(n_individuals) / sqrt(n()),
-    images_per_night = mean(n_images),
-    .groups = "drop"
+    n_nights = n(),
+    mean     = mean(n_individuals),
+    se       = sd(n_individuals) / sqrt(n()),
+    .groups  = "drop"
   ) %>%
-  mutate(pos = night_pos(hour), hour_label = sprintf("%02d:00", hour)) %>%
-  filter(n_nights >= min_nights, pos %in% night_window) %>%
-  arrange(site, pos)
+  mutate(block = factor(block, levels = block_levels)) %>%
+  arrange(site, block)
 
 print(insecta_hourly, n = Inf)
 
-# Full hour grid so unsampled hours appear as gaps (NA breaks the line)
-hourly_plot_df <- expand_grid(site = sites,
-                              pos = seq(min(insecta_hourly$pos), max(insecta_hourly$pos))) %>%
-  left_join(insecta_hourly, by = c("site", "pos"))
-
-p_insecta_hourly <- ggplot(hourly_plot_df,
-                           aes(x = pos, y = mean, color = site, fill = site, group = site)) +
-  geom_ribbon(aes(ymin = pmax(mean - se, 0), ymax = mean + se),
-              alpha = 0.15, color = NA, na.rm = TRUE) +
-  geom_line(linewidth = 1.3, na.rm = TRUE) +
-  geom_point(size = 3, na.rm = TRUE) +
+p_insecta_hourly <- ggplot(insecta_hourly,
+                           aes(x = block, y = mean, color = site, group = site)) +
+  geom_errorbar(aes(ymin = pmax(mean - se, 0), ymax = mean + se),
+                width = 0.12, linewidth = 0.8,
+                position = position_dodge(width = 0.15)) +
+  geom_line(linewidth = 1.3, position = position_dodge(width = 0.15)) +
+  geom_point(size = 3.5, position = position_dodge(width = 0.15)) +
   scale_color_discrete(labels = site_labels) +
-  scale_fill_discrete(labels = site_labels, guide = "none") +
-  scale_x_continuous(
-    breaks = sort(unique(insecta_hourly$pos)),
-    labels = function(p) sprintf("%02d:00", (p + 12L) %% 24L)
-  ) +
+  scale_y_continuous(limits = c(0, NA), expand = expansion(mult = c(0, 0.05))) +
   labs(
-    x = "Hour (local time)",
-    y = "Unique Insecta clusters per hour",
+    x = "Capture block (local time)",
+    y = "Unique Insecta clusters per block",
     color = "Site",
-    title = "Insecta by hour",
-    subtitle = paste0(
-      format(min(dates), "%b %d"), " to ", format(max(dates), "%b %d, %Y"),
-      " | mean ± SE over nights sampled | gaps = hours not sampled"
-    )
+    title = "Insecta through the night",
+    subtitle = paste0(format(min(dates), "%b %d"), " to ", format(max(dates), "%b %d, %Y"),
+                      " | mean ± SE | ", n_label())
   ) +
   theme_bw(base_size = base_text) +
-  theme(legend.position = "top", panel.grid.minor.x = element_blank())
+  theme(legend.position = "top")
 
 print(p_insecta_hourly)
 
