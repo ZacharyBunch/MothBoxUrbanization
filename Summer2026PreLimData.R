@@ -151,6 +151,10 @@ library(ggplot2)
 base_text <- 18
 label_size <- base_text / 3.2
 
+# Land-use context shown in every legend
+site_labels <- c("Rock Springs"  = "Rock Springs (rural)",
+                 "Veggie Celler" = "Veggie Celler (urban)")
+
 # One sample-size label per graph (nights per site)
 n_label <- function() {
   if (n_distinct(nights_per_site$n_nights) == 1) {
@@ -198,6 +202,7 @@ p_insecta_hourly <- ggplot(insecta_hourly,
                            aes(x = hour, y = mean_per_night,
                                color = site, group = site)) +
   geom_line(linewidth = 1.3) +
+  scale_color_discrete(labels = site_labels) +
   geom_point(size = 3) +
   labs(
     x = "Hour (local time)",
@@ -322,6 +327,7 @@ make_composition <- function(measure = c("mean", "total"), top_n = 10) {
 
   p <- ggplot(composition, aes(x = value, y = taxon_key, fill = site)) +
     geom_col(position = position_dodge(width = 0.8), width = 0.75) +
+    scale_fill_discrete(labels = site_labels) +
     facet_wrap(~ panel, ncol = 2, scales = "free") +
     scale_y_discrete(labels = function(x) sub("^.*___", "", x)) +
     scale_x_continuous(expand = expansion(mult = c(0, 0.05))) +
@@ -471,6 +477,7 @@ p_labels <- site_tests %>%
 
 p_diversity <- ggplot(bar_df, aes(x = site, y = mean, fill = site)) +
   geom_col(width = 0.7) +
+  scale_fill_discrete(labels = site_labels) +
   geom_errorbar(aes(ymin = pmax(mean - se, 0), ymax = mean + se),
                 width = 0.2, linewidth = 0.4) +
   geom_text(data = p_labels, aes(x = 1.5, y = Inf, label = label),
@@ -564,6 +571,7 @@ plot_top_taxa <- function(rank, n_top = 6) {
 
   p <- ggplot(summary_df, aes(x = site, y = mean, fill = site)) +
     geom_col(width = 0.7) +
+    scale_fill_discrete(labels = site_labels) +
     geom_errorbar(aes(ymin = pmax(mean - se, 0), ymax = mean + se),
                   width = 0.2, linewidth = 0.4) +
     geom_text(data = tests, aes(x = 1.5, y = Inf, label = label),
