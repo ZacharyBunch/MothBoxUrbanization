@@ -358,7 +358,7 @@ print(diversity_summary, n = Inf)
 
 #### Site comparison: Welch two-sample t-test per rank x metric ####
 # Nights are the replicates (about 5 per site), so power is low; treat p-values
-# as descriptive. Holm correction is applied within each metric across ranks.
+# as descriptive.
 
 site_tests <- diversity_long %>%
   filter(!is.na(value)) %>%
@@ -370,10 +370,7 @@ site_tests <- diversity_long %>%
     df      = tryCatch(unname(t.test(value ~ site)$parameter), error = function(e) NA_real_),
     p_value = tryCatch(t.test(value ~ site)$p.value,           error = function(e) NA_real_),
     .groups = "drop"
-  ) %>%
-  group_by(metric) %>%
-  mutate(p_holm = p.adjust(p_value, method = "holm")) %>%
-  ungroup()
+  )
 
 diversity_compare <- diversity_summary %>%
   select(rank, metric, site, mean) %>%
@@ -500,8 +497,7 @@ plot_top_taxa <- function(rank, n_top = 5) {
       p_value = tryCatch(t.test(n ~ site)$p.value,           error = function(e) NA_real_),
       .groups = "drop"
     ) %>%
-    mutate(p_holm = p.adjust(p_value, method = "holm"),
-           label  = format_p(p_value),
+    mutate(label  = format_p(p_value),
            taxon  = factor(taxon, levels = taxon_order))
 
   comparison <- summary_df %>%
