@@ -147,6 +147,20 @@ print(count(moth_data, site, night, source_file))
 #### Insecta by site by hour ####
 library(ggplot2)
 
+# Text size for all figures (points); geom_text sizes are in mm, so scale them too
+base_text <- 18
+label_size <- base_text / 3.2
+
+# One sample-size label per graph (nights per site)
+n_label <- function() {
+  if (n_distinct(nights_per_site$n_nights) == 1) {
+    paste0("N = ", nights_per_site$n_nights[1], " nights per site")
+  } else {
+    paste0("N nights: ", paste(nights_per_site$site, nights_per_site$n_nights,
+                                collapse = ", "))
+  }
+}
+
 # Night order: 12:00 through 11:00 next day
 hour_levels <- sprintf("%02d:00", c(12:23, 0:11))
 
@@ -183,8 +197,8 @@ print(insecta_hourly, n = Inf)
 p_insecta_hourly <- ggplot(insecta_hourly,
                            aes(x = hour, y = mean_per_night,
                                color = site, group = site)) +
-  geom_line(linewidth = 1) +
-  geom_point(size = 2) +
+  geom_line(linewidth = 1.3) +
+  geom_point(size = 3) +
   labs(
     x = "Hour (local time)",
     y = "Unique Insecta clusters per night (mean)",
@@ -193,14 +207,14 @@ p_insecta_hourly <- ggplot(insecta_hourly,
     subtitle = paste(format(min(dates), "%b %d"), "to", format(max(dates), "%b %d, %Y"),
                      "| repeat detections collapsed by cluster")
   ) +
-  theme_bw() +
+  theme_bw(base_size = base_text) +
   theme(legend.position = "top")
 
 print(p_insecta_hourly)
 
 dir.create("figures", showWarnings = FALSE)
 ggsave(file.path("figures", "insecta_by_site_by_hour.png"),
-       p_insecta_hourly, width = 8, height = 5, dpi = 300)
+       p_insecta_hourly, width = 11, height = 7, dpi = 300)
 
 #### Insecta composition by order, family, genus ####
 
@@ -231,13 +245,14 @@ if (nrow(bad_rows) > 0) {
   insecta <- filter(insecta, !order %in% non_insect_orders)
 }
 
-plot_rank <- function(rank, top_n = 15) {
+# Data for one rank: top N taxa by combined mean, per site, plus ID rate
+rank_data <- function(rank, top_n = 10) {
   # Share of individuals identified to this rank, per site
   id_rate <- insecta %>%
     distinct(site, night, individual, .keep_all = TRUE) %>%
     group_by(site) %>%
-    summarise(pct = round(100 * mean(!is.na(.data[[rank]]) & .data[[rank]] != ""))) %>%
-    mutate(lab = paste0(site, " ", pct, "%"))
+    summarise(pct = round(100 * mean(!is.na(.data[[rank]]) & .data[[rank]] != "")),
+              .groups = "drop")
 
   by_taxon <- insecta %>%
     filter(!is.na(.data[[rank]]), .data[[rank]] != "") %>%
@@ -249,48 +264,72 @@ plot_rank <- function(rank, top_n = 15) {
     left_join(nights_per_site, by = "site") %>%
     mutate(mean_per_night = total / n_nights)
 
-  # Keep the top N taxa by combined mean across sites
   top_taxa <- by_taxon %>%
     group_by(taxon) %>%
     summarise(overall = sum(mean_per_night), .groups = "drop") %>%
     slice_max(overall, n = top_n, with_ties = FALSE)
 
-  plot_df <- by_taxon %>%
+  # Panel label: rank + share identified at each site
+  panel <- paste0(
+    str_to_sentence(rank), " (identified: ",
+    paste0(id_rate$site, " ", id_rate$pct, "%", collapse = ", "), ")"
+  )
+
+  by_taxon %>%
     filter(taxon %in% top_taxa$taxon) %>%
-    mutate(taxon = factor(taxon, levels = rev(top_taxa$taxon)))
-
-  print(arrange(plot_df, desc(mean_per_night)), n = Inf)
-
-  rank_title <- str_to_sentence(rank)
-
-  p <- ggplot(plot_df, aes(x = mean_per_night, y = taxon, fill = site)) +
-    geom_col(position = position_dodge(width = 0.8), width = 0.75) +
-    labs(
-      x = "Unique Insecta clusters per night (mean)",
-      y = NULL,
-      fill = "Site",
-      title = paste("Insecta by", tolower(rank_title)),
-      subtitle = paste0(
-        format(min(dates), "%b %d"), " to ", format(max(dates), "%b %d, %Y"),
-        " | top ", nrow(top_taxa), " | identified to ", tolower(rank_title), ": ",
-        paste(id_rate$lab, collapse = ", ")
-      )
-    ) +
-    theme_bw() +
-    theme(legend.position = "top")
-
-  print(p)
-
-  ggsave(file.path("figures", paste0("insecta_by_site_by_", rank, ".png")),
-         p, width = 8, height = 6, dpi = 300)
-
-  invisible(p)
+    mutate(
+      rank  = rank,
+      panel = panel,
+      # Unique key per rank so each panel keeps its own ordering
+      taxon_key = paste(rank, taxon, sep = "___"),
+      overall   = top_taxa$overall[match(taxon, top_taxa$taxon)]
+    )
 }
 
-p_order  <- plot_rank("order")
-p_family <- plot_rank("family")
-p_genus  <- plot_rank("genus")
-p_species <- plot_rank("species")
+composition <- map_dfr(c("order", "family", "genus", "species"), rank_data)
+
+print(composition %>% arrange(rank, desc(overall), site) %>%
+        select(rank, taxon, site, total, mean_per_night), n = Inf)
+
+# Order taxa within each panel by combined abundance (largest at top)
+key_levels <- composition %>%
+  distinct(rank, taxon_key, overall) %>%
+  arrange(rank, overall) %>%
+  pull(taxon_key)
+
+composition <- composition %>%
+  mutate(
+    taxon_key = factor(taxon_key, levels = unique(key_levels)),
+    panel = factor(panel, levels = unique(panel[order(match(rank, c("order", "family", "genus", "species")))]))
+  )
+
+p_composition <- ggplot(composition,
+                        aes(x = mean_per_night, y = taxon_key, fill = site)) +
+  geom_col(position = position_dodge(width = 0.8), width = 0.75) +
+  facet_wrap(~ panel, ncol = 2, scales = "free") +
+  scale_y_discrete(labels = function(x) sub("^.*___", "", x)) +
+  scale_x_continuous(expand = expansion(mult = c(0, 0.05))) +
+  labs(
+    x = "Unique Insecta clusters per night (mean)",
+    y = NULL,
+    fill = "Site",
+    title = "Insecta composition by taxonomic level",
+    subtitle = paste0(
+      format(min(dates), "%b %d"), " to ", format(max(dates), "%b %d, %Y"),
+      " | top 10 taxa per level, both sites combined | ", n_label()
+    )
+  ) +
+  theme_bw(base_size = base_text) +
+  theme(
+    legend.position  = "top",
+    strip.background = element_rect(fill = "grey95"),
+    strip.text       = element_text(face = "bold")
+  )
+
+print(p_composition)
+
+ggsave(file.path("figures", "insecta_composition_by_rank.png"),
+       p_composition, width = 18, height = 14, dpi = 300)
 
 #### Diversity: abundance, richness, Shannon, evenness by taxonomic level ####
 # Unit = one site-night. Individuals = unique clusters (see above).
@@ -393,16 +432,6 @@ metric_labels <- c(
   evenness          = "Evenness (J)"
 )
 
-# One sample-size label per graph (nights per site)
-n_label <- function() {
-  if (n_distinct(nights_per_site$n_nights) == 1) {
-    paste0("N = ", nights_per_site$n_nights[1], " nights per site")
-  } else {
-    paste0("N nights: ", paste(nights_per_site$site, nights_per_site$n_nights,
-                                collapse = ", "))
-  }
-}
-
 format_p <- function(p) {
   case_when(
     is.na(p)  ~ "p = NA",
@@ -423,7 +452,7 @@ p_diversity <- ggplot(bar_df, aes(x = site, y = mean, fill = site)) +
   geom_errorbar(aes(ymin = pmax(mean - se, 0), ymax = mean + se),
                 width = 0.2, linewidth = 0.4) +
   geom_text(data = p_labels, aes(x = 1.5, y = Inf, label = label),
-            inherit.aes = FALSE, vjust = 1.4, size = 3) +
+            inherit.aes = FALSE, vjust = 1.4, size = label_size) +
   facet_grid(metric ~ rank, scales = "free_y", switch = "y",
              labeller = labeller(metric = metric_labels, rank = str_to_sentence)) +
   scale_y_continuous(expand = expansion(mult = c(0, 0.25))) +
@@ -435,7 +464,7 @@ p_diversity <- ggplot(bar_df, aes(x = site, y = mean, fill = site)) +
       " | bars = mean ± SE | ", n_label(), " | Welch t-test"
     )
   ) +
-  theme_bw() +
+  theme_bw(base_size = base_text) +
   theme(
     legend.position  = "top",
     strip.placement  = "outside",
@@ -447,7 +476,7 @@ p_diversity <- ggplot(bar_df, aes(x = site, y = mean, fill = site)) +
 print(p_diversity)
 
 ggsave(file.path("figures", "insecta_diversity_by_rank.png"),
-       p_diversity, width = 10, height = 8, dpi = 300)
+       p_diversity, width = 14, height = 11, dpi = 300)
 
 #### Top 6 orders and families (both sites combined): count comparison ####
 # Taxa = 6 most abundant across both sites combined (unique clusters, all nights).
@@ -516,7 +545,7 @@ plot_top_taxa <- function(rank, n_top = 6) {
     geom_errorbar(aes(ymin = pmax(mean - se, 0), ymax = mean + se),
                   width = 0.2, linewidth = 0.4) +
     geom_text(data = tests, aes(x = 1.5, y = Inf, label = label),
-              inherit.aes = FALSE, vjust = 1.4, size = 3) +
+              inherit.aes = FALSE, vjust = 1.4, size = label_size) +
     facet_wrap(~ taxon, scales = "free_y") +
     scale_y_continuous(expand = expansion(mult = c(0, 0.25))) +
     labs(
@@ -529,7 +558,7 @@ plot_top_taxa <- function(rank, n_top = 6) {
         " | bars = mean ± SE | ", n_label(), " | Welch t-test"
       )
     ) +
-    theme_bw() +
+    theme_bw(base_size = base_text) +
     theme(
       legend.position  = "top",
       strip.background = element_rect(fill = "grey95"),
@@ -540,7 +569,7 @@ plot_top_taxa <- function(rank, n_top = 6) {
   print(p)
 
   ggsave(file.path("figures", paste0("top", n_top, "_", rank, "_by_site.png")),
-         p, width = 9, height = 6, dpi = 300)
+         p, width = 13, height = 9, dpi = 300)
 
   invisible(p)
 }
