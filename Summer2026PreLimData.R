@@ -403,21 +403,47 @@ dir.create(file.path("data", "derived"), recursive = TRUE, showWarnings = FALSE)
 write_csv(diversity, file.path("data", "derived", "diversity_by_site_night_rank.csv"))
 write_csv(diversity_compare, file.path("data", "derived", "diversity_site_comparison.csv"))
 
-#### Plot: each metric x rank, nights as points, mean +/- SE ####
+#### Plot: bar graphs (mean +/- SE) with Wilcoxon p-values ####
 
-p_diversity <- ggplot(diversity_long, aes(x = site, y = value, color = site)) +
-  geom_jitter(width = 0.12, height = 0, alpha = 0.6, size = 1.8, na.rm = TRUE) +
-  stat_summary(fun.data = mean_se, geom = "pointrange",
-               color = "black", size = 0.35, na.rm = TRUE) +
-  facet_grid(metric ~ rank, scales = "free_y", switch = "y") +
+metric_labels <- c(
+  abundance         = "Abundance",
+  richness          = "Richness",
+  rarefied_richness = "Rarefied richness",
+  shannon           = "Shannon H'",
+  simpson           = "Simpson 1-D",
+  evenness          = "Evenness (J)"
+)
+
+format_p <- function(p) {
+  case_when(
+    is.na(p)  ~ "p = NA",
+    p < 0.001 ~ "p < 0.001",
+    TRUE      ~ paste0("p = ", formatC(p, format = "f", digits = 3))
+  )
+}
+
+bar_df <- diversity_summary %>%
+  filter(n_nights > 0) %>%
+  mutate(se = replace_na(se, 0))
+
+p_labels <- site_tests %>%
+  mutate(label = format_p(p_value))
+
+p_diversity <- ggplot(bar_df, aes(x = site, y = mean, fill = site)) +
+  geom_col(width = 0.7) +
+  geom_errorbar(aes(ymin = pmax(mean - se, 0), ymax = mean + se),
+                width = 0.2, linewidth = 0.4) +
+  geom_text(data = p_labels, aes(x = 1.5, y = Inf, label = label),
+            inherit.aes = FALSE, vjust = 1.4, size = 3) +
+  facet_grid(metric ~ rank, scales = "free_y", switch = "y",
+             labeller = labeller(metric = metric_labels, rank = str_to_sentence)) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.25))) +
   labs(
-    x = NULL, y = NULL, color = "Site",
+    x = NULL, y = NULL, fill = "Site",
     title = "Insecta diversity by taxonomic level",
     subtitle = paste0(
       format(min(dates), "%b %d"), " to ", format(max(dates), "%b %d, %Y"),
-      " | points = nights, black = mean ± SE | rarefied to: ",
-      paste(paste0(ranks, " n=", distinct(diversity, rank, rarefied_to)$rarefied_to),
-            collapse = ", ")
+      " | bars = mean ± SE across nights | Wilcoxon rank-sum, unadjusted p"
     )
   ) +
   theme_bw() +
