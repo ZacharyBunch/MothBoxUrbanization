@@ -449,14 +449,14 @@ print(p_diversity)
 ggsave(file.path("figures", "insecta_diversity_by_rank.png"),
        p_diversity, width = 10, height = 8, dpi = 300)
 
-#### Top 5 orders and families (both sites combined): count comparison ####
-# Taxa = 5 most abundant across both sites combined (unique clusters, all nights).
+#### Top 6 orders and families (both sites combined): count comparison ####
+# Taxa = 6 most abundant across both sites combined (unique clusters, all nights).
 # Counts are per night; nights where a taxon was not seen count as 0.
 # Bars = mean +/- SE across nights; Welch t-test per taxon.
 
 site_nights <- distinct(moth_data, site, night)
 
-plot_top_taxa <- function(rank, n_top = 5) {
+plot_top_taxa <- function(rank, n_top = 6) {
   counts <- taxon_counts(rank)
 
   top_taxa <- counts %>%
